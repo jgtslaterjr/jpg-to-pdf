@@ -192,6 +192,30 @@ body {
   background: #f4f4ee;
 }
 
+.btn.active {
+  background: var(--accent);
+  border-color: var(--accent);
+  color: var(--accent-ink);
+}
+
+.btn.active:hover:not(:disabled) {
+  background: #b1573a;
+}
+
+.divider {
+  border: none;
+  border-top: 1px solid var(--border);
+  margin: 16px 0 12px;
+}
+
+body.region-mode .thumb canvas {
+  cursor: crosshair;
+}
+
+.thumb-meta .clear-region {
+  margin-right: 8px;
+}
+
 .status {
   margin: 8px 0 0;
   min-height: 1.2em;

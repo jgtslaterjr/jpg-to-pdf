@@ -6,14 +6,19 @@
   const convertBtn = document.getElementById('convertBtn');
   const resetBtn = document.getElementById('resetBtn');
   const statusEl = document.getElementById('status');
+  const markRegionBtn = document.getElementById('markRegionBtn');
+  const clearRegionsBtn = document.getElementById('clearRegionsBtn');
 
   const sliders = {
     whiteout: { el: document.getElementById('whiteout'), out: document.getElementById('whiteoutOut'), default: 55 },
     textBoost: { el: document.getElementById('textBoost'), out: document.getElementById('textBoostOut'), default: 25 },
     brightness: { el: document.getElementById('brightness'), out: document.getElementById('brightnessOut'), default: 10 },
     contrast: { el: document.getElementById('contrast'), out: document.getElementById('contrastOut'), default: 25 },
+    feather: { el: document.getElementById('feather'), out: document.getElementById('featherOut'), default: 5 },
   };
   const grayscale = document.getElementById('grayscale');
+
+  let regionMode = false;
 
   const PREVIEW_MAX_WIDTH = 1100;
   const EXPORT_MAX_WIDTH = 2400;
@@ -73,54 +78,107 @@
     const textBoost = Number(sliders.textBoost.el.value);
     const brightness = Number(sliders.brightness.el.value);
     const contrast = Number(sliders.contrast.el.value);
+    const featherPct = Number(sliders.feather.el.value);
     const isGray = grayscale.checked;
 
-    // Map whiteout 0..100 -> white point 255..155 (anything brighter becomes white)
     const whitePoint = Math.max(80, 255 - whiteout);
-    // Map textBoost 0..100 -> black point 0..80 (anything darker becomes black)
     const blackPoint = Math.min(80, textBoost);
     const range = Math.max(1, whitePoint - blackPoint);
-    // Standard contrast factor
     const c = Math.max(-100, Math.min(100, contrast));
     const contrastFactor = (259 * (c + 255)) / (255 * (259 - c));
 
-    return { whitePoint, blackPoint, range, brightness, contrastFactor, isGray };
+    return { whitePoint, blackPoint, range, brightness, contrastFactor, isGray, featherPct };
   }
 
-  function applyAdjustments(canvas, adj) {
+  function applyAdjustments(canvas, adj, region) {
     const ctx = canvas.getContext('2d', { willReadFrequently: true });
-    const img = ctx.getImageData(0, 0, canvas.width, canvas.height);
+    const W = canvas.width;
+    const H = canvas.height;
+    const img = ctx.getImageData(0, 0, W, H);
     const data = img.data;
     const { whitePoint, blackPoint, range, brightness, contrastFactor, isGray } = adj;
 
-    for (let i = 0; i < data.length; i += 4) {
-      let r = data[i];
-      let g = data[i + 1];
-      let b = data[i + 2];
+    // Region mask config (in pixel coords for this canvas).
+    let useRegion = false;
+    let rxMin = 0, ryMin = 0, rxMax = W, ryMax = H, halfFeather = 0;
+    if (region && region.w > 0 && region.h > 0) {
+      useRegion = true;
+      rxMin = region.x * W;
+      ryMin = region.y * H;
+      rxMax = (region.x + region.w) * W;
+      ryMax = (region.y + region.h) * H;
+      const minSidePx = Math.min(region.w * W, region.h * H);
+      halfFeather = Math.max(0, ((adj.featherPct || 0) / 100) * minSidePx) / 2;
+    }
 
-      if (isGray) {
-        const lum = 0.299 * r + 0.587 * g + 0.114 * b;
-        r = g = b = lum;
+    for (let py = 0; py < H; py++) {
+      for (let px = 0; px < W; px++) {
+        const i = (py * W + px) * 4;
+        const r0 = data[i];
+        const g0 = data[i + 1];
+        const b0 = data[i + 2];
+
+        let r = r0;
+        let g = g0;
+        let b = b0;
+
+        if (isGray) {
+          const lum = 0.299 * r + 0.587 * g + 0.114 * b;
+          r = g = b = lum;
+        }
+
+        r += brightness;
+        g += brightness;
+        b += brightness;
+
+        r = contrastFactor * (r - 128) + 128;
+        g = contrastFactor * (g - 128) + 128;
+        b = contrastFactor * (b - 128) + 128;
+
+        r = ((r - blackPoint) / range) * 255;
+        g = ((g - blackPoint) / range) * 255;
+        b = ((b - blackPoint) / range) * 255;
+
+        if (r < 0) r = 0; else if (r > 255) r = 255;
+        if (g < 0) g = 0; else if (g > 255) g = 255;
+        if (b < 0) b = 0; else if (b > 255) b = 255;
+
+        if (useRegion) {
+          // Signed distance from rectangle edge: positive inside, negative outside.
+          const dxOut = Math.max(rxMin - px, px - rxMax);
+          const dyOut = Math.max(ryMin - py, py - ryMax);
+          let d;
+          if (dxOut < 0 && dyOut < 0) {
+            d = -Math.max(dxOut, dyOut); // inside
+          } else if (dxOut >= 0 && dyOut >= 0) {
+            d = -Math.sqrt(dxOut * dxOut + dyOut * dyOut); // outside corner
+          } else {
+            d = -Math.max(dxOut, dyOut); // outside edge
+          }
+
+          let w;
+          if (halfFeather === 0) {
+            w = d >= 0 ? 1 : 0;
+          } else if (d >= halfFeather) {
+            w = 1;
+          } else if (d <= -halfFeather) {
+            w = 0;
+          } else {
+            const t = (d + halfFeather) / (2 * halfFeather);
+            w = t * t * (3 - 2 * t); // smoothstep
+          }
+
+          if (w < 1) {
+            r = r0 + (r - r0) * w;
+            g = g0 + (g - g0) * w;
+            b = b0 + (b - b0) * w;
+          }
+        }
+
+        data[i] = r;
+        data[i + 1] = g;
+        data[i + 2] = b;
       }
-
-      // Brightness (additive)
-      r += brightness;
-      g += brightness;
-      b += brightness;
-
-      // Contrast around mid-gray
-      r = contrastFactor * (r - 128) + 128;
-      g = contrastFactor * (g - 128) + 128;
-      b = contrastFactor * (b - 128) + 128;
-
-      // Levels: black -> 0, white -> 255
-      r = ((r - blackPoint) / range) * 255;
-      g = ((g - blackPoint) / range) * 255;
-      b = ((b - blackPoint) / range) * 255;
-
-      data[i] = r < 0 ? 0 : r > 255 ? 255 : r;
-      data[i + 1] = g < 0 ? 0 : g > 255 ? 255 : g;
-      data[i + 2] = b < 0 ? 0 : b > 255 ? 255 : b;
     }
 
     ctx.putImageData(img, 0, 0);
@@ -128,11 +186,35 @@
 
   function renderPage(page) {
     const adj = getAdjustments();
-
-    // preview is rendered from the source each time
     const previewCtx = page.previewCanvas.getContext('2d', { willReadFrequently: true });
     previewCtx.drawImage(page.sourceCanvas, 0, 0, page.previewCanvas.width, page.previewCanvas.height);
-    applyAdjustments(page.previewCanvas, adj);
+    const activeRegion = page.tempRegion || page.region;
+    applyAdjustments(page.previewCanvas, adj, activeRegion);
+    drawRegionOutline(page.previewCanvas, activeRegion);
+  }
+
+  function drawRegionOutline(canvas, region) {
+    if (!region || region.w <= 0 || region.h <= 0) return;
+    const ctx = canvas.getContext('2d');
+    const W = canvas.width;
+    const H = canvas.height;
+    const x = region.x * W;
+    const y = region.y * H;
+    const w = region.w * W;
+    const h = region.h * H;
+
+    ctx.save();
+    // Draw a white halo first, then the accent dashed line, so it reads on
+    // any background.
+    ctx.lineWidth = 3;
+    ctx.strokeStyle = 'rgba(255, 255, 255, 0.85)';
+    ctx.setLineDash([]);
+    ctx.strokeRect(x, y, w, h);
+    ctx.lineWidth = 1.5;
+    ctx.strokeStyle = '#c96442';
+    ctx.setLineDash([6, 4]);
+    ctx.strokeRect(x, y, w, h);
+    ctx.restore();
   }
 
   function renderAll() {
@@ -153,6 +235,7 @@
     page.previewCanvas.width = page.sourceCanvas.width;
     page.previewCanvas.height = page.sourceCanvas.height;
     wrap.appendChild(page.previewCanvas);
+    attachRegionDrawing(page);
 
     const meta = document.createElement('div');
     meta.className = 'thumb-meta';
@@ -162,16 +245,98 @@
     name.style.overflow = 'hidden';
     name.style.textOverflow = 'ellipsis';
     name.style.whiteSpace = 'nowrap';
-    name.style.maxWidth = '70%';
+    name.style.maxWidth = '60%';
+
+    const right = document.createElement('span');
+    right.style.display = 'flex';
+    right.style.gap = '8px';
+
+    const clearRegion = document.createElement('button');
+    clearRegion.type = 'button';
+    clearRegion.className = 'clear-region';
+    clearRegion.textContent = 'Clear region';
+    clearRegion.style.display = 'none';
+    clearRegion.addEventListener('click', () => {
+      page.region = null;
+      page.tempRegion = null;
+      updateClearButton(page);
+      renderPage(page);
+    });
+
     const remove = document.createElement('button');
     remove.type = 'button';
     remove.textContent = 'Remove';
     remove.addEventListener('click', () => removePage(page.id));
+
+    right.appendChild(clearRegion);
+    right.appendChild(remove);
     meta.appendChild(name);
-    meta.appendChild(remove);
+    meta.appendChild(right);
     wrap.appendChild(meta);
 
+    page._clearRegionBtn = clearRegion;
+
     thumbs.appendChild(wrap);
+  }
+
+  function updateClearButton(page) {
+    if (!page._clearRegionBtn) return;
+    page._clearRegionBtn.style.display = page.region ? 'inline' : 'none';
+  }
+
+  function attachRegionDrawing(page) {
+    const canvas = page.previewCanvas;
+    let drag = null;
+
+    function pointToNorm(e) {
+      const rect = canvas.getBoundingClientRect();
+      const nx = (e.clientX - rect.left) / rect.width;
+      const ny = (e.clientY - rect.top) / rect.height;
+      return [Math.max(0, Math.min(1, nx)), Math.max(0, Math.min(1, ny))];
+    }
+
+    function rectFromPoints(a, b) {
+      const x = Math.min(a[0], b[0]);
+      const y = Math.min(a[1], b[1]);
+      const w = Math.abs(a[0] - b[0]);
+      const h = Math.abs(a[1] - b[1]);
+      return { x, y, w, h };
+    }
+
+    canvas.addEventListener('pointerdown', (e) => {
+      if (!regionMode) return;
+      e.preventDefault();
+      canvas.setPointerCapture(e.pointerId);
+      const start = pointToNorm(e);
+      drag = { start, last: start };
+      page.tempRegion = rectFromPoints(start, start);
+      renderPage(page);
+    });
+
+    canvas.addEventListener('pointermove', (e) => {
+      if (!drag) return;
+      drag.last = pointToNorm(e);
+      page.tempRegion = rectFromPoints(drag.start, drag.last);
+      renderPage(page);
+    });
+
+    function endDrag(e) {
+      if (!drag) return;
+      try { canvas.releasePointerCapture(e.pointerId); } catch (_) {}
+      const finalRect = rectFromPoints(drag.start, drag.last);
+      drag = null;
+      page.tempRegion = null;
+      // Treat tiny drags as cancel.
+      if (finalRect.w < 0.01 || finalRect.h < 0.01) {
+        renderPage(page);
+        return;
+      }
+      page.region = finalRect;
+      updateClearButton(page);
+      renderPage(page);
+    }
+    canvas.addEventListener('pointerup', endDrag);
+    canvas.addEventListener('pointercancel', endDrag);
   }
 
   function removePage(id) {
@@ -235,6 +400,24 @@
     scheduleRender();
   });
 
+  function setRegionMode(on) {
+    regionMode = Boolean(on);
+    document.body.classList.toggle('region-mode', regionMode);
+    markRegionBtn.classList.toggle('active', regionMode);
+    markRegionBtn.textContent = regionMode ? 'Done marking' : 'Mark region';
+  }
+
+  markRegionBtn.addEventListener('click', () => setRegionMode(!regionMode));
+
+  clearRegionsBtn.addEventListener('click', () => {
+    for (const page of pages) {
+      page.region = null;
+      page.tempRegion = null;
+      updateClearButton(page);
+    }
+    renderAll();
+  });
+
   fileInput.addEventListener('change', () => {
     if (fileInput.files && fileInput.files.length) addFiles(fileInput.files);
     fileInput.value = '';
@@ -260,7 +443,6 @@
 
   function exportPageBlob(page, adj) {
     return new Promise(async (resolve, reject) => {
-      // Re-render at higher resolution from the source bitmap if larger.
       let exportCanvas = page.sourceCanvas;
       if (page.file && page.sourceCanvas.width < EXPORT_MAX_WIDTH) {
         try {
@@ -268,17 +450,15 @@
           if (bitmap.width > page.sourceCanvas.width) {
             exportCanvas = makeScaledCanvas(bitmap, EXPORT_MAX_WIDTH);
           }
-        } catch (_) {
-          // fallback to preview-size source
-        }
+        } catch (_) {}
       }
 
-      // Apply adjustments to a copy so we don't mutate source.
       const out = document.createElement('canvas');
       out.width = exportCanvas.width;
       out.height = exportCanvas.height;
       out.getContext('2d').drawImage(exportCanvas, 0, 0);
-      applyAdjustments(out, adj);
+      // Region is normalized so it scales naturally to the export resolution.
+      applyAdjustments(out, adj, page.region || null);
 
       out.toBlob(
         (blob) => (blob ? resolve(blob) : reject(new Error('toBlob failed'))),

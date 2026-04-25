@@ -10,7 +10,7 @@
     <header class="topbar">
       <h1>JPG to Searchable PDF</h1>
       <p class="subtitle">
-        Lighten paper backgrounds while keeping text crisp, then OCR with Claude
+        Lighten paper backgrounds while keeping text crisp, OCR with Tesseract,
         and download a searchable PDF.
       </p>
     </header>
@@ -111,6 +111,44 @@
               Convert to grayscale
             </label>
           </div>
+
+          <hr class="divider" />
+
+          <h2>Region (optional)</h2>
+          <p class="hint">
+            Limit the adjustments to a part of a page. Click <em>Mark region</em>,
+            then drag a box on any thumbnail. The effect feathers smoothly to the
+            edge of the box so the surrounding image is left untouched.
+          </p>
+
+          <div class="actions">
+            <button id="markRegionBtn" type="button" class="btn ghost">
+              Mark region
+            </button>
+            <button id="clearRegionsBtn" type="button" class="btn ghost">
+              Clear regions
+            </button>
+          </div>
+
+          <div class="slider">
+            <label>
+              Feather
+              <output id="featherOut">5</output>
+            </label>
+            <input
+              id="feather"
+              type="range"
+              min="0"
+              max="25"
+              value="5"
+              step="1"
+            />
+            <span class="hint-row">
+              Width of the soft edge as a percent of the smaller region side.
+            </span>
+          </div>
+
+          <hr class="divider" />
 
           <div class="actions">
             <button id="resetBtn" type="button" class="btn ghost">
