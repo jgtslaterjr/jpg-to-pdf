@@ -4,7 +4,12 @@ const express = require('express');
 const multer = require('multer');
 const path = require('path');
 const Anthropic = require('@anthropic-ai/sdk');
-const { PDFDocument, StandardFonts, rgb } = require('pdf-lib');
+const {
+  PDFDocument,
+  StandardFonts,
+  setTextRenderingMode,
+  TextRenderingMode,
+} = require('pdf-lib');
 
 const app = express();
 const port = process.env.PORT || 3000;
@@ -98,9 +103,10 @@ async function buildSearchablePdf(pages) {
     const cleanText = sanitizeForWinAnsi(page.text || '').trim();
     if (!cleanText) continue;
 
-    // Render the OCR text as an invisible layer covering the page so the PDF
-    // is searchable / selectable. Positions are not word-accurate, but the
-    // text content is fully indexed.
+    // Text rendering mode 3 = invisible. The glyphs are not painted, but
+    // the text is still indexed for search and selection in PDF viewers.
+    pdfPage.pushOperators(setTextRenderingMode(TextRenderingMode.Invisible));
+
     const lines = cleanText.split(/\r?\n/);
     const margin = Math.max(image.width, image.height) * 0.02;
     const usableWidth = image.width - margin * 2;
@@ -143,8 +149,6 @@ async function buildSearchablePdf(pages) {
           y,
           size: fontSize,
           font,
-          color: rgb(0, 0, 0),
-          opacity: 0,
         });
       }
       y -= lineHeight;
