@@ -90,7 +90,53 @@
     return { whitePoint, blackPoint, range, brightness, contrastFactor, isGray, featherPct };
   }
 
-  function applyAdjustments(canvas, adj, region) {
+  function polygonBBox(points) {
+    let minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity;
+    for (const p of points) {
+      if (p.x < minX) minX = p.x;
+      if (p.x > maxX) maxX = p.x;
+      if (p.y < minY) minY = p.y;
+      if (p.y > maxY) maxY = p.y;
+    }
+    return { x: minX, y: minY, w: maxX - minX, h: maxY - minY };
+  }
+
+  // Rasterize the polygon into an alpha mask canvas at the same dimensions
+  // as the target. Blurring the mask via ctx.filter gives us the feathered
+  // edge in O(W*H) time regardless of how many points the user drew.
+  function buildRegionMask(W, H, region, featherPct) {
+    if (!region || !region.points || region.points.length < 3) return null;
+
+    const mask = document.createElement('canvas');
+    mask.width = W;
+    mask.height = H;
+    const ctx = mask.getContext('2d', { willReadFrequently: true });
+
+    ctx.fillStyle = '#000';
+    ctx.beginPath();
+    const pts = region.points;
+    ctx.moveTo(pts[0].x * W, pts[0].y * H);
+    for (let i = 1; i < pts.length; i++) {
+      ctx.lineTo(pts[i].x * W, pts[i].y * H);
+    }
+    ctx.closePath();
+    ctx.fill();
+
+    const bbox = polygonBBox(pts);
+    const minSidePx = Math.max(1, Math.min(bbox.w * W, bbox.h * H));
+    const featherPx = Math.max(0, ((featherPct || 0) / 100) * minSidePx);
+    if (featherPx <= 0.5) return mask;
+
+    const blurred = document.createElement('canvas');
+    blurred.width = W;
+    blurred.height = H;
+    const bctx = blurred.getContext('2d', { willReadFrequently: true });
+    bctx.filter = `blur(${featherPx}px)`;
+    bctx.drawImage(mask, 0, 0);
+    return blurred;
+  }
+
+  function applyAdjustments(canvas, adj, regionMask) {
     const ctx = canvas.getContext('2d', { willReadFrequently: true });
     const W = canvas.width;
     const H = canvas.height;
@@ -98,87 +144,55 @@
     const data = img.data;
     const { whitePoint, blackPoint, range, brightness, contrastFactor, isGray } = adj;
 
-    // Region mask config (in pixel coords for this canvas).
-    let useRegion = false;
-    let rxMin = 0, ryMin = 0, rxMax = W, ryMax = H, halfFeather = 0;
-    if (region && region.w > 0 && region.h > 0) {
-      useRegion = true;
-      rxMin = region.x * W;
-      ryMin = region.y * H;
-      rxMax = (region.x + region.w) * W;
-      ryMax = (region.y + region.h) * H;
-      const minSidePx = Math.min(region.w * W, region.h * H);
-      halfFeather = Math.max(0, ((adj.featherPct || 0) / 100) * minSidePx) / 2;
+    let mask = null;
+    if (regionMask) {
+      mask = regionMask
+        .getContext('2d', { willReadFrequently: true })
+        .getImageData(0, 0, W, H).data;
     }
 
-    for (let py = 0; py < H; py++) {
-      for (let px = 0; px < W; px++) {
-        const i = (py * W + px) * 4;
-        const r0 = data[i];
-        const g0 = data[i + 1];
-        const b0 = data[i + 2];
+    for (let i = 0; i < data.length; i += 4) {
+      const r0 = data[i];
+      const g0 = data[i + 1];
+      const b0 = data[i + 2];
 
-        let r = r0;
-        let g = g0;
-        let b = b0;
+      let r = r0;
+      let g = g0;
+      let b = b0;
 
-        if (isGray) {
-          const lum = 0.299 * r + 0.587 * g + 0.114 * b;
-          r = g = b = lum;
-        }
-
-        r += brightness;
-        g += brightness;
-        b += brightness;
-
-        r = contrastFactor * (r - 128) + 128;
-        g = contrastFactor * (g - 128) + 128;
-        b = contrastFactor * (b - 128) + 128;
-
-        r = ((r - blackPoint) / range) * 255;
-        g = ((g - blackPoint) / range) * 255;
-        b = ((b - blackPoint) / range) * 255;
-
-        if (r < 0) r = 0; else if (r > 255) r = 255;
-        if (g < 0) g = 0; else if (g > 255) g = 255;
-        if (b < 0) b = 0; else if (b > 255) b = 255;
-
-        if (useRegion) {
-          // Signed distance from rectangle edge: positive inside, negative outside.
-          const dxOut = Math.max(rxMin - px, px - rxMax);
-          const dyOut = Math.max(ryMin - py, py - ryMax);
-          let d;
-          if (dxOut < 0 && dyOut < 0) {
-            d = -Math.max(dxOut, dyOut); // inside
-          } else if (dxOut >= 0 && dyOut >= 0) {
-            d = -Math.sqrt(dxOut * dxOut + dyOut * dyOut); // outside corner
-          } else {
-            d = -Math.max(dxOut, dyOut); // outside edge
-          }
-
-          let w;
-          if (halfFeather === 0) {
-            w = d >= 0 ? 1 : 0;
-          } else if (d >= halfFeather) {
-            w = 1;
-          } else if (d <= -halfFeather) {
-            w = 0;
-          } else {
-            const t = (d + halfFeather) / (2 * halfFeather);
-            w = t * t * (3 - 2 * t); // smoothstep
-          }
-
-          if (w < 1) {
-            r = r0 + (r - r0) * w;
-            g = g0 + (g - g0) * w;
-            b = b0 + (b - b0) * w;
-          }
-        }
-
-        data[i] = r;
-        data[i + 1] = g;
-        data[i + 2] = b;
+      if (isGray) {
+        const lum = 0.299 * r + 0.587 * g + 0.114 * b;
+        r = g = b = lum;
       }
+
+      r += brightness;
+      g += brightness;
+      b += brightness;
+
+      r = contrastFactor * (r - 128) + 128;
+      g = contrastFactor * (g - 128) + 128;
+      b = contrastFactor * (b - 128) + 128;
+
+      r = ((r - blackPoint) / range) * 255;
+      g = ((g - blackPoint) / range) * 255;
+      b = ((b - blackPoint) / range) * 255;
+
+      if (r < 0) r = 0; else if (r > 255) r = 255;
+      if (g < 0) g = 0; else if (g > 255) g = 255;
+      if (b < 0) b = 0; else if (b > 255) b = 255;
+
+      if (mask) {
+        const w = mask[i + 3] / 255;
+        if (w < 1) {
+          r = r0 + (r - r0) * w;
+          g = g0 + (g - g0) * w;
+          b = b0 + (b - b0) * w;
+        }
+      }
+
+      data[i] = r;
+      data[i + 1] = g;
+      data[i + 2] = b;
     }
 
     ctx.putImageData(img, 0, 0);
@@ -189,31 +203,48 @@
     const previewCtx = page.previewCanvas.getContext('2d', { willReadFrequently: true });
     previewCtx.drawImage(page.sourceCanvas, 0, 0, page.previewCanvas.width, page.previewCanvas.height);
     const activeRegion = page.tempRegion || page.region;
-    applyAdjustments(page.previewCanvas, adj, activeRegion);
+    const mask = buildRegionMask(
+      page.previewCanvas.width,
+      page.previewCanvas.height,
+      activeRegion,
+      adj.featherPct
+    );
+    applyAdjustments(page.previewCanvas, adj, mask);
     drawRegionOutline(page.previewCanvas, activeRegion);
   }
 
   function drawRegionOutline(canvas, region) {
-    if (!region || region.w <= 0 || region.h <= 0) return;
+    if (!region || !region.points || region.points.length < 2) return;
     const ctx = canvas.getContext('2d');
     const W = canvas.width;
     const H = canvas.height;
-    const x = region.x * W;
-    const y = region.y * H;
-    const w = region.w * W;
-    const h = region.h * H;
+    const pts = region.points;
+    const closed = region.points.length >= 3 && region.closed !== false;
+
+    function tracePath() {
+      ctx.beginPath();
+      ctx.moveTo(pts[0].x * W, pts[0].y * H);
+      for (let i = 1; i < pts.length; i++) {
+        ctx.lineTo(pts[i].x * W, pts[i].y * H);
+      }
+      if (closed) ctx.closePath();
+    }
 
     ctx.save();
-    // Draw a white halo first, then the accent dashed line, so it reads on
-    // any background.
+    // White halo so the outline is visible on dark and light pages.
     ctx.lineWidth = 3;
     ctx.strokeStyle = 'rgba(255, 255, 255, 0.85)';
     ctx.setLineDash([]);
-    ctx.strokeRect(x, y, w, h);
+    ctx.lineJoin = 'round';
+    ctx.lineCap = 'round';
+    tracePath();
+    ctx.stroke();
+
     ctx.lineWidth = 1.5;
     ctx.strokeStyle = '#c96442';
     ctx.setLineDash([6, 4]);
-    ctx.strokeRect(x, y, w, h);
+    tracePath();
+    ctx.stroke();
     ctx.restore();
   }
 
@@ -286,57 +317,81 @@
 
   function attachRegionDrawing(page) {
     const canvas = page.previewCanvas;
-    let drag = null;
+    const MIN_POINT_DIST = 0.004; // ~0.4% of canvas — limits points per drag
+
+    let drawing = null; // { points: [{x,y}, ...], pointerId, lastRender }
+    let pendingFrame = null;
 
     function pointToNorm(e) {
       const rect = canvas.getBoundingClientRect();
       const nx = (e.clientX - rect.left) / rect.width;
       const ny = (e.clientY - rect.top) / rect.height;
-      return [Math.max(0, Math.min(1, nx)), Math.max(0, Math.min(1, ny))];
+      return {
+        x: Math.max(0, Math.min(1, nx)),
+        y: Math.max(0, Math.min(1, ny)),
+      };
     }
 
-    function rectFromPoints(a, b) {
-      const x = Math.min(a[0], b[0]);
-      const y = Math.min(a[1], b[1]);
-      const w = Math.abs(a[0] - b[0]);
-      const h = Math.abs(a[1] - b[1]);
-      return { x, y, w, h };
+    function scheduleDrawingRender() {
+      if (pendingFrame) return;
+      pendingFrame = requestAnimationFrame(() => {
+        pendingFrame = null;
+        renderPage(page);
+      });
     }
 
     canvas.addEventListener('pointerdown', (e) => {
       if (!regionMode) return;
       e.preventDefault();
       canvas.setPointerCapture(e.pointerId);
-      const start = pointToNorm(e);
-      drag = { start, last: start };
-      page.tempRegion = rectFromPoints(start, start);
-      renderPage(page);
+      const p = pointToNorm(e);
+      drawing = { points: [p], pointerId: e.pointerId };
+      page.tempRegion = { points: [p], closed: false };
+      scheduleDrawingRender();
     });
 
     canvas.addEventListener('pointermove', (e) => {
-      if (!drag) return;
-      drag.last = pointToNorm(e);
-      page.tempRegion = rectFromPoints(drag.start, drag.last);
-      renderPage(page);
+      if (!drawing) return;
+      const p = pointToNorm(e);
+      const last = drawing.points[drawing.points.length - 1];
+      const dx = p.x - last.x;
+      const dy = p.y - last.y;
+      if (dx * dx + dy * dy < MIN_POINT_DIST * MIN_POINT_DIST) return;
+      drawing.points.push(p);
+      page.tempRegion = { points: drawing.points.slice(), closed: false };
+      scheduleDrawingRender();
     });
 
-    function endDrag(e) {
-      if (!drag) return;
+    function endDraw(e) {
+      if (!drawing) return;
       try { canvas.releasePointerCapture(e.pointerId); } catch (_) {}
-      const finalRect = rectFromPoints(drag.start, drag.last);
-      drag = null;
+      const points = drawing.points.slice();
+      drawing = null;
       page.tempRegion = null;
-      // Treat tiny drags as cancel.
-      if (finalRect.w < 0.01 || finalRect.h < 0.01) {
+
+      // Need at least 3 distinct points to form an area; otherwise cancel.
+      if (points.length < 3) {
+        if (pendingFrame) {
+          cancelAnimationFrame(pendingFrame);
+          pendingFrame = null;
+        }
         renderPage(page);
         return;
       }
-      page.region = finalRect;
+      // Also ensure the polygon's bbox is non-trivial so a stray click
+      // doesn't make a near-zero-area mask.
+      const bbox = polygonBBox(points);
+      if (bbox.w < 0.01 || bbox.h < 0.01) {
+        renderPage(page);
+        return;
+      }
+
+      page.region = { points };
       updateClearButton(page);
       renderPage(page);
     }
-    canvas.addEventListener('pointerup', endDrag);
-    canvas.addEventListener('pointercancel', endDrag);
+    canvas.addEventListener('pointerup', endDraw);
+    canvas.addEventListener('pointercancel', endDraw);
   }
 
   function removePage(id) {
@@ -458,7 +513,8 @@
       out.height = exportCanvas.height;
       out.getContext('2d').drawImage(exportCanvas, 0, 0);
       // Region is normalized so it scales naturally to the export resolution.
-      applyAdjustments(out, adj, page.region || null);
+      const exportMask = buildRegionMask(out.width, out.height, page.region, adj.featherPct);
+      applyAdjustments(out, adj, exportMask);
 
       out.toBlob(
         (blob) => (blob ? resolve(blob) : reject(new Error('toBlob failed'))),
