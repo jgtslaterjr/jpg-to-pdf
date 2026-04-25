@@ -1,0 +1,139 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>JPG to Searchable PDF</title>
+    <link rel="stylesheet" href="/style.css" />
+  </head>
+  <body>
+    <header class="topbar">
+      <h1>JPG to Searchable PDF</h1>
+      <p class="subtitle">
+        Lighten paper backgrounds while keeping text crisp, then OCR with Claude
+        and download a searchable PDF.
+      </p>
+    </header>
+
+    <main class="layout">
+      <section class="panel uploader">
+        <label class="dropzone" id="dropzone">
+          <input
+            id="fileInput"
+            type="file"
+            accept="image/jpeg,image/jpg,image/png"
+            multiple
+            hidden
+          />
+          <div class="dropzone-inner">
+            <strong>Click or drop images</strong>
+            <span>JPG or PNG &middot; multi-page documents supported</span>
+          </div>
+        </label>
+
+        <div class="controls">
+          <h2>Background adjustments</h2>
+          <p class="hint">
+            Applied to every page. Tune to flatten the paper background without
+            washing out the text.
+          </p>
+
+          <div class="slider">
+            <label>
+              Background lighten
+              <output id="whiteoutOut">55</output>
+            </label>
+            <input
+              id="whiteout"
+              type="range"
+              min="0"
+              max="100"
+              value="55"
+              step="1"
+            />
+            <span class="hint-row"
+              >Pixels brighter than this threshold get pushed to pure
+              white.</span
+            >
+          </div>
+
+          <div class="slider">
+            <label>
+              Text darken
+              <output id="textBoostOut">25</output>
+            </label>
+            <input
+              id="textBoost"
+              type="range"
+              min="0"
+              max="100"
+              value="25"
+              step="1"
+            />
+            <span class="hint-row"
+              >Pixels darker than this threshold get pushed toward black.</span
+            >
+          </div>
+
+          <div class="slider">
+            <label>
+              Brightness
+              <output id="brightnessOut">10</output>
+            </label>
+            <input
+              id="brightness"
+              type="range"
+              min="-50"
+              max="80"
+              value="10"
+              step="1"
+            />
+          </div>
+
+          <div class="slider">
+            <label>
+              Contrast
+              <output id="contrastOut">25</output>
+            </label>
+            <input
+              id="contrast"
+              type="range"
+              min="-50"
+              max="100"
+              value="25"
+              step="1"
+            />
+          </div>
+
+          <div class="toggles">
+            <label>
+              <input id="grayscale" type="checkbox" checked />
+              Convert to grayscale
+            </label>
+          </div>
+
+          <div class="actions">
+            <button id="resetBtn" type="button" class="btn ghost">
+              Reset
+            </button>
+            <button id="convertBtn" type="button" class="btn primary" disabled>
+              Convert to PDF
+            </button>
+          </div>
+
+          <p id="status" class="status" role="status" aria-live="polite"></p>
+        </div>
+      </section>
+
+      <section class="panel preview">
+        <header class="preview-header">
+          <h2>Preview</h2>
+          <span id="pageCount" class="muted">No images loaded</span>
+        </header>
+        <div id="thumbs" class="thumbs"></div>
+      </section>
+    </main>
+
+    <script src="/app.js"></script>
+  </body>
+</html>
