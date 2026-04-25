@@ -176,8 +176,17 @@ app.post('/api/convert', upload.array('images', 50), async (req, res) => {
     }
 
     const pdfBytes = await buildSearchablePdf(pages);
+
+    const firstName = (req.files[0].originalname || '').replace(/\.[^.]+$/, '');
+    const requested = (req.body && req.body.filename) || firstName || 'document';
+    const safeBase = requested.replace(/[\\/:*?"<>|\x00-\x1F]/g, '_').trim() || 'document';
+    const outName = `${safeBase}.pdf`;
+
     res.setHeader('Content-Type', 'application/pdf');
-    res.setHeader('Content-Disposition', 'attachment; filename="document.pdf"');
+    res.setHeader(
+      'Content-Disposition',
+      `attachment; filename="${outName}"; filename*=UTF-8''${encodeURIComponent(outName)}`
+    );
     res.send(Buffer.from(pdfBytes));
   } catch (err) {
     console.error('[convert] error:', err);

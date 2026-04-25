@@ -304,6 +304,10 @@
         formData.append('images', blob, `${safe}.jpg`);
       }
 
+      const firstBase = (pages[0].name || '').replace(/\.[^.]+$/, '') || 'document';
+      const outName = `${firstBase}.pdf`;
+      formData.append('filename', firstBase);
+
       setStatus('Running OCR and building PDF… this can take a moment.');
       const res = await fetch('/api/convert', { method: 'POST', body: formData });
       if (!res.ok) {
@@ -319,7 +323,7 @@
       const url = URL.createObjectURL(blob);
       const a = document.createElement('a');
       a.href = url;
-      a.download = 'document.pdf';
+      a.download = outName;
       document.body.appendChild(a);
       a.click();
       a.remove();
