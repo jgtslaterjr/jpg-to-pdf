@@ -90,6 +90,32 @@
     return { whitePoint, blackPoint, range, brightness, contrastFactor, isGray, featherPct };
   }
 
+  function snapshotSliderState() {
+    return {
+      whiteout: Number(sliders.whiteout.el.value),
+      textBoost: Number(sliders.textBoost.el.value),
+      brightness: Number(sliders.brightness.el.value),
+      contrast: Number(sliders.contrast.el.value),
+      grayscale: grayscale.checked,
+    };
+  }
+
+  function adjFromSliderState(s) {
+    const whitePoint = Math.max(80, 255 - s.whiteout);
+    const blackPoint = Math.min(80, s.textBoost);
+    const range = Math.max(1, whitePoint - blackPoint);
+    const c = Math.max(-100, Math.min(100, s.contrast));
+    const contrastFactor = (259 * (c + 255)) / (255 * (259 - c));
+    return {
+      whitePoint,
+      blackPoint,
+      range,
+      brightness: s.brightness,
+      contrastFactor,
+      isGray: s.grayscale,
+    };
+  }
+
   function polygonBBox(points) {
     let minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity;
     for (const p of points) {
@@ -136,63 +162,88 @@
     return blurred;
   }
 
-  function applyAdjustments(canvas, adj, regionMask) {
+  // Apply current adjustments to all pixels. If a regionMask AND a baselineAdj
+  // are provided, pixels outside the region use the baseline transform and
+  // pixels inside use the current transform; the mask alpha drives a smooth
+  // blend along the feathered edge so the rest of the document keeps the
+  // look it had when the region was drawn.
+  function applyAdjustments(canvas, currentAdj, baselineAdj, regionMask) {
     const ctx = canvas.getContext('2d', { willReadFrequently: true });
     const W = canvas.width;
     const H = canvas.height;
     const img = ctx.getImageData(0, 0, W, H);
     const data = img.data;
-    const { whitePoint, blackPoint, range, brightness, contrastFactor, isGray } = adj;
 
-    let mask = null;
-    if (regionMask) {
-      mask = regionMask
-        .getContext('2d', { willReadFrequently: true })
-        .getImageData(0, 0, W, H).data;
-    }
+    const useBlend = !!(regionMask && baselineAdj);
+    const mask = useBlend
+      ? regionMask
+          .getContext('2d', { willReadFrequently: true })
+          .getImageData(0, 0, W, H).data
+      : null;
+
+    const cBp = currentAdj.blackPoint;
+    const cRange = currentAdj.range;
+    const cBr = currentAdj.brightness;
+    const cCf = currentAdj.contrastFactor;
+    const cGr = currentAdj.isGray;
+
+    const bAdj = baselineAdj || currentAdj;
+    const bBp = bAdj.blackPoint;
+    const bRange = bAdj.range;
+    const bBr = bAdj.brightness;
+    const bCf = bAdj.contrastFactor;
+    const bGr = bAdj.isGray;
 
     for (let i = 0; i < data.length; i += 4) {
       const r0 = data[i];
       const g0 = data[i + 1];
       const b0 = data[i + 2];
 
-      let r = r0;
-      let g = g0;
-      let b = b0;
+      // Current (inside-the-region) transform.
+      let rc = r0, gc = g0, bc = b0;
+      if (cGr) {
+        const lum = 0.299 * rc + 0.587 * gc + 0.114 * bc;
+        rc = gc = bc = lum;
+      }
+      rc += cBr; gc += cBr; bc += cBr;
+      rc = cCf * (rc - 128) + 128;
+      gc = cCf * (gc - 128) + 128;
+      bc = cCf * (bc - 128) + 128;
+      rc = ((rc - cBp) / cRange) * 255;
+      gc = ((gc - cBp) / cRange) * 255;
+      bc = ((bc - cBp) / cRange) * 255;
+      if (rc < 0) rc = 0; else if (rc > 255) rc = 255;
+      if (gc < 0) gc = 0; else if (gc > 255) gc = 255;
+      if (bc < 0) bc = 0; else if (bc > 255) bc = 255;
 
-      if (isGray) {
-        const lum = 0.299 * r + 0.587 * g + 0.114 * b;
-        r = g = b = lum;
+      if (!useBlend) {
+        data[i] = rc;
+        data[i + 1] = gc;
+        data[i + 2] = bc;
+        continue;
       }
 
-      r += brightness;
-      g += brightness;
-      b += brightness;
-
-      r = contrastFactor * (r - 128) + 128;
-      g = contrastFactor * (g - 128) + 128;
-      b = contrastFactor * (b - 128) + 128;
-
-      r = ((r - blackPoint) / range) * 255;
-      g = ((g - blackPoint) / range) * 255;
-      b = ((b - blackPoint) / range) * 255;
-
-      if (r < 0) r = 0; else if (r > 255) r = 255;
-      if (g < 0) g = 0; else if (g > 255) g = 255;
-      if (b < 0) b = 0; else if (b > 255) b = 255;
-
-      if (mask) {
-        const w = mask[i + 3] / 255;
-        if (w < 1) {
-          r = r0 + (r - r0) * w;
-          g = g0 + (g - g0) * w;
-          b = b0 + (b - b0) * w;
-        }
+      // Baseline (outside-the-region) transform.
+      let rb = r0, gb = g0, bb = b0;
+      if (bGr) {
+        const lum = 0.299 * rb + 0.587 * gb + 0.114 * bb;
+        rb = gb = bb = lum;
       }
+      rb += bBr; gb += bBr; bb += bBr;
+      rb = bCf * (rb - 128) + 128;
+      gb = bCf * (gb - 128) + 128;
+      bb = bCf * (bb - 128) + 128;
+      rb = ((rb - bBp) / bRange) * 255;
+      gb = ((gb - bBp) / bRange) * 255;
+      bb = ((bb - bBp) / bRange) * 255;
+      if (rb < 0) rb = 0; else if (rb > 255) rb = 255;
+      if (gb < 0) gb = 0; else if (gb > 255) gb = 255;
+      if (bb < 0) bb = 0; else if (bb > 255) bb = 255;
 
-      data[i] = r;
-      data[i + 1] = g;
-      data[i + 2] = b;
+      const w = mask[i + 3] / 255;
+      data[i]     = rb + (rc - rb) * w;
+      data[i + 1] = gb + (gc - gb) * w;
+      data[i + 2] = bb + (bc - bb) * w;
     }
 
     ctx.putImageData(img, 0, 0);
@@ -203,13 +254,19 @@
     const previewCtx = page.previewCanvas.getContext('2d', { willReadFrequently: true });
     previewCtx.drawImage(page.sourceCanvas, 0, 0, page.previewCanvas.width, page.previewCanvas.height);
     const activeRegion = page.tempRegion || page.region;
-    const mask = buildRegionMask(
-      page.previewCanvas.width,
-      page.previewCanvas.height,
-      activeRegion,
-      adj.featherPct
-    );
-    applyAdjustments(page.previewCanvas, adj, mask);
+    const baselineAdj = page.baselineSliders ? adjFromSliderState(page.baselineSliders) : null;
+    // The mask is only needed once a baseline exists. While the user is
+    // mid-drag (tempRegion set, no baseline yet), we render globally so the
+    // outline previews on top of the image they already see.
+    const mask = (page.region && baselineAdj)
+      ? buildRegionMask(
+          page.previewCanvas.width,
+          page.previewCanvas.height,
+          page.region,
+          adj.featherPct
+        )
+      : null;
+    applyAdjustments(page.previewCanvas, adj, baselineAdj, mask);
     drawRegionOutline(page.previewCanvas, activeRegion);
   }
 
@@ -290,6 +347,7 @@
     clearRegion.addEventListener('click', () => {
       page.region = null;
       page.tempRegion = null;
+      page.baselineSliders = null;
       updateClearButton(page);
       renderPage(page);
     });
@@ -387,6 +445,12 @@
       }
 
       page.region = { points };
+      // Snapshot the slider values that produced the look the user already
+      // sees. The polygon's interior will continue to follow the live
+      // sliders from now on; the exterior is locked to this snapshot.
+      if (!page.baselineSliders) {
+        page.baselineSliders = snapshotSliderState();
+      }
       updateClearButton(page);
       renderPage(page);
     }
@@ -468,6 +532,7 @@
     for (const page of pages) {
       page.region = null;
       page.tempRegion = null;
+      page.baselineSliders = null;
       updateClearButton(page);
     }
     renderAll();
@@ -513,8 +578,11 @@
       out.height = exportCanvas.height;
       out.getContext('2d').drawImage(exportCanvas, 0, 0);
       // Region is normalized so it scales naturally to the export resolution.
-      const exportMask = buildRegionMask(out.width, out.height, page.region, adj.featherPct);
-      applyAdjustments(out, adj, exportMask);
+      const baselineAdj = page.baselineSliders ? adjFromSliderState(page.baselineSliders) : null;
+      const exportMask = (page.region && baselineAdj)
+        ? buildRegionMask(out.width, out.height, page.region, adj.featherPct)
+        : null;
+      applyAdjustments(out, adj, baselineAdj, exportMask);
 
       out.toBlob(
         (blob) => (blob ? resolve(blob) : reject(new Error('toBlob failed'))),
