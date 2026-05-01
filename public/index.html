@@ -168,11 +168,29 @@
       <section class="panel preview">
         <header class="preview-header">
           <h2>Preview</h2>
-          <span id="pageCount" class="muted">No images loaded</span>
+          <div class="preview-header-right">
+            <span id="pageCount" class="muted">No images loaded</span>
+            <label class="size-control">
+              <span>Size</span>
+              <input
+                id="thumbSize"
+                type="range"
+                min="160"
+                max="640"
+                value="260"
+                step="10"
+              />
+            </label>
+          </div>
         </header>
         <div id="thumbs" class="thumbs"></div>
       </section>
     </main>
+
+    <div id="lightbox" class="lightbox" hidden>
+      <button id="lightboxClose" type="button" class="lightbox-close" aria-label="Close">×</button>
+      <img id="lightboxImg" alt="Expanded preview" />
+    </div>
 
     <script src="/app.js"></script>
   </body>

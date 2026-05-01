@@ -8,6 +8,11 @@
   const statusEl = document.getElementById('status');
   const markRegionBtn = document.getElementById('markRegionBtn');
   const clearRegionsBtn = document.getElementById('clearRegionsBtn');
+  const thumbSize = document.getElementById('thumbSize');
+  const previewPanel = document.querySelector('.preview');
+  const lightbox = document.getElementById('lightbox');
+  const lightboxImg = document.getElementById('lightboxImg');
+  const lightboxClose = document.getElementById('lightboxClose');
 
   const sliders = {
     whiteout: { el: document.getElementById('whiteout'), out: document.getElementById('whiteoutOut'), default: 55 },
@@ -322,6 +327,11 @@
     page.previewCanvas = document.createElement('canvas');
     page.previewCanvas.width = page.sourceCanvas.width;
     page.previewCanvas.height = page.sourceCanvas.height;
+    page.previewCanvas.title = 'Click to expand';
+    page.previewCanvas.addEventListener('click', () => {
+      if (regionMode) return;
+      openLightbox(page);
+    });
     wrap.appendChild(page.previewCanvas);
     attachRegionDrawing(page);
 
@@ -467,6 +477,12 @@
     refreshPageCount();
   }
 
+  function clearPages() {
+    pages.length = 0;
+    thumbs.replaceChildren();
+    refreshPageCount();
+  }
+
   async function addFiles(fileList) {
     const accepted = Array.from(fileList).filter((f) =>
       /^image\/(jpeg|jpg|png)$/i.test(f.type) || /\.(jpe?g|png)$/i.test(f.name)
@@ -510,13 +526,37 @@
   Object.keys(sliders).forEach(bindSlider);
   grayscale.addEventListener('change', scheduleRender);
 
+  function applyThumbSize() {
+    previewPanel.style.setProperty('--thumb-size', `${thumbSize.value}px`);
+  }
+  thumbSize.addEventListener('input', applyThumbSize);
+  applyThumbSize();
+
+  function openLightbox(page) {
+    lightboxImg.src = page.previewCanvas.toDataURL('image/jpeg', 0.92);
+    lightbox.hidden = false;
+  }
+  function closeLightbox() {
+    lightbox.hidden = true;
+    lightboxImg.removeAttribute('src');
+  }
+  lightbox.addEventListener('click', (e) => {
+    if (e.target === lightbox) closeLightbox();
+  });
+  lightboxClose.addEventListener('click', closeLightbox);
+  document.addEventListener('keydown', (e) => {
+    if (e.key === 'Escape' && !lightbox.hidden) closeLightbox();
+  });
+
   resetBtn.addEventListener('click', () => {
     for (const key of Object.keys(sliders)) {
       sliders[key].el.value = String(sliders[key].default);
       sliders[key].out.textContent = String(sliders[key].default);
     }
     grayscale.checked = true;
-    scheduleRender();
+    if (regionMode) setRegionMode(false);
+    clearPages();
+    setStatus('');
   });
 
   function setRegionMode(on) {
@@ -632,6 +672,8 @@
       a.click();
       a.remove();
       URL.revokeObjectURL(url);
+      if (regionMode) setRegionMode(false);
+      clearPages();
       setStatus('Done. Your searchable PDF has been downloaded.');
     } catch (err) {
       console.error(err);
